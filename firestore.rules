@@ -1,0 +1,155 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function getUserData(uid) {
+      return get(/databases/$(database)/documents/users/$(uid));
+    }
+
+    function isTeacher() {
+      return isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid)) && getUserData(request.auth.uid).data.get('role', 'none') == 'teacher';
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    // Validation Helpers
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'email', 'name', 'role', 'createdAt']) &&
+             data.keys().size() >= 5 &&
+             data.uid == request.auth.uid &&
+             data.email is string &&
+             data.name is string && data.name.size() <= 100 &&
+             data.role in ['student', 'teacher'] &&
+             data.createdAt is string;
+    }
+
+    function isValidClass(data) {
+      return data.keys().hasAll(['name', 'teacherId', 'createdAt']) &&
+             data.teacherId == request.auth.uid &&
+             data.name is string && data.name.size() <= 100;
+    }
+
+    function isValidSession(data) {
+      return data.keys().hasAll(['classId', 'teacherId', 'qrCode', 'expiresAt', 'createdAt']) &&
+             data.teacherId == request.auth.uid &&
+             data.qrCode is string &&
+             data.expiresAt is number;
+    }
+
+    function isValidAttendance(data) {
+      return data.keys().hasAll(['sessionId', 'classId', 'teacherId', 'studentId', 'name', 'timestamp']) &&
+             data.studentId == request.auth.uid &&
+             data.name is string &&
+             data.timestamp is string;
+    }
+
+    function isValidAssignment(data) {
+      return data.keys().hasAll(['title', 'description', 'dueDate', 'classId', 'teacherId', 'createdAt']) &&
+             data.teacherId == request.auth.uid;
+    }
+
+    function isValidSubmission(data) {
+      return data.keys().hasAll(['assignmentId', 'studentId', 'studentName', 'content', 'submittedAt', 'status']) &&
+             data.assignmentId is string &&
+             data.studentId is string &&
+             data.studentName is string &&
+             data.content is string &&
+             data.submittedAt is string &&
+             data.status in ['submitted', 'late', 'pending'];
+    }
+
+    function isValidActivity(data) {
+      return data.keys().hasAll(['title', 'type', 'date', 'description', 'teacherId', 'createdAt']) &&
+             data.teacherId == request.auth.uid;
+    }
+
+    // Test connection path
+    match /test_connection/{docId} {
+      allow read: if isSignedIn();
+    }
+
+    // User profiles
+    match /users/{userId} {
+      allow read: if isSignedIn() && (isOwner(userId) || isTeacher());
+      allow create: if isSignedIn() && isOwner(userId) && isValidUser(incoming());
+      allow update: if isSignedIn() && isOwner(userId) && isValidUser(incoming()) && (
+        incoming().diff(existing()).affectedKeys().hasOnly(['name', 'department', 'studentId'])
+      );
+    }
+
+    // Classes
+    match /classes/{classId} {
+      allow read: if isSignedIn();
+      allow create: if isTeacher() && isValidClass(incoming());
+      allow update: if isTeacher() && existing().teacherId == request.auth.uid && isValidClass(incoming()) && (
+        incoming().diff(existing()).affectedKeys().hasOnly(['name', 'location'])
+      );
+      allow delete: if isTeacher() && existing().teacherId == request.auth.uid;
+    }
+
+    // Sessions
+    match /sessions/{sessionId} {
+      allow read: if isSignedIn();
+      allow create: if isTeacher() && isValidSession(incoming());
+      allow update: if isTeacher() && existing().teacherId == request.auth.uid && isValidSession(incoming()) && (
+        incoming().diff(existing()).affectedKeys().hasOnly(['qrCode', 'expiresAt'])
+      );
+      allow delete: if isTeacher() && existing().teacherId == request.auth.uid;
+    }
+
+    // Attendance Records
+    match /attendance/{recordId} {
+      allow read: if isSignedIn() && (resource.data.studentId == request.auth.uid || resource.data.teacherId == request.auth.uid || isTeacher());
+      allow create: if isSignedIn() && isValidAttendance(incoming());
+    }
+
+    // Assignments
+    match /assignments/{assignmentId} {
+      allow read: if isSignedIn();
+      allow create: if isTeacher() && isValidAssignment(incoming());
+      allow update: if isTeacher() && resource.data.teacherId == request.auth.uid && isValidAssignment(incoming());
+      allow delete: if isTeacher() && resource.data.teacherId == request.auth.uid;
+    }
+
+    // Assignment Submissions
+    match /assignment_submissions/{submissionId} {
+      allow read: if isSignedIn() && (existing().studentId == request.auth.uid || isTeacher());
+      allow create: if isSignedIn() && incoming().studentId == request.auth.uid && isValidSubmission(incoming());
+      allow update: if isSignedIn() && (
+        (existing().studentId == request.auth.uid && incoming().studentId == request.auth.uid && !incoming().diff(existing()).affectedKeys().hasAny(['grade', 'feedback'])) ||
+        isTeacher()
+      ) && isValidSubmission(incoming());
+    }
+
+    // Activities
+    match /activities/{activityId} {
+      allow read: if isSignedIn();
+      allow create: if isTeacher() && isValidActivity(incoming());
+      allow update: if isTeacher() && existing().teacherId == request.auth.uid && isValidActivity(incoming());
+      allow delete: if isTeacher() && existing().teacherId == request.auth.uid;
+    }
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "name": "Smart Attendance",
+  "description": "QR-based college attendance system with real-time updates and anti-proxy features.",
+  "requestFramePermissions": ["camera", "geolocation"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
